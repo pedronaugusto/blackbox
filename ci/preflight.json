@@ -4,7 +4,8 @@
   ],
   "test_roots": [
     "src/tests.zig",
-    "src/testing/jsonl_test.zig"
+    "src/testing/jsonl_test.zig",
+    "src/testing/chronicle_test.zig"
   ],
   "test_support": [
     "src/testing/**"
@@ -40,6 +41,14 @@
       "imports": [
         "blackbox",
         "blackbox_jsonl"
+      ]
+    },
+    "zig build docs -- chronicle": {
+      "source": "examples/chronicle.zig",
+      "region": "chronicle",
+      "imports": [
+        "blackbox",
+        "blackbox_chronicle"
       ]
     },
     "zig build docs -- queued": {

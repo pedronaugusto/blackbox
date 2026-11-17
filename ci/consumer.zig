@@ -1,7 +1,8 @@
-//! What a project that depends on blackbox and nothing else writes, plain and with `.jsonl = true`.
-//! Built by `check-consumer` with only the packages blackbox itself needs (aegis and almanac, and
-//! strand for blackbox_jsonl), so blackbox's build.zig works without any of its own development's;
-//! `blackbox_jsonl` is imported where the build made it.
+//! What a project that depends on blackbox and nothing else writes, plain, with `.jsonl = true` and
+//! with `.chronicle = true`. Built by `check-consumer` with only the packages blackbox itself needs
+//! (aegis and almanac, strand for an optional module, chronicle for the chronicle sink), so
+//! blackbox's build.zig works without any of its own development's; `blackbox_jsonl` and
+//! `blackbox_chronicle` are imported where the build made them.
 const std = @import("std");
 const blackbox = @import("blackbox");
 
@@ -14,6 +15,7 @@ pub fn main(init: std.process.Init) !void {
     defer logger.deinit(io);
     logger.scoped(.consumer).info(io, "built", .{ .jsonl = blackbox.built_with.jsonl });
     if (blackbox.built_with.jsonl) try jsonl(@import("blackbox_jsonl"), init.gpa, io);
+    if (blackbox.built_with.chronicle) chronicle(@import("blackbox_chronicle"));
 }
 
 /// blackbox_jsonl's sink, in the build that has it: a record written to a discarding writer.
@@ -24,4 +26,14 @@ fn jsonl(comptime blackbox_jsonl: type, gpa: std.mem.Allocator, io: std.Io) !voi
     defer logger.deinit(io);
     logger.scoped(.consumer).info(io, "as JSON", .{ .n = 1 });
     if (discarding.fullCount() == 0) return error.NothingWritten;
+}
+
+/// blackbox_chronicle's names, in the build that has them: compiled, and the sink a `Sink`.
+fn chronicle(comptime blackbox_chronicle: type) void {
+    _ = &blackbox_chronicle.ChronicleSink.init;
+    _ = &blackbox_chronicle.ChronicleSink.deinit;
+    _ = &blackbox_chronicle.Journal.open;
+    comptime {
+        if (@FieldType(blackbox_chronicle.ChronicleSink, "sink") != blackbox.Sink) @compileError("the chronicle sink is a blackbox Sink");
+    }
 }

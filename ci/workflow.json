@@ -3,17 +3,42 @@
     {
       "name": "plain",
       "options": {
-        "jsonl": false
+        "jsonl": false,
+        "chronicle": false
       }
     },
     {
       "name": "jsonl",
       "options": {
-        "jsonl": true
+        "jsonl": true,
+        "chronicle": false
       },
       "modules": [
         "blackbox",
         "blackbox_jsonl"
+      ]
+    },
+    {
+      "name": "chronicle",
+      "options": {
+        "jsonl": false,
+        "chronicle": true
+      },
+      "modules": [
+        "blackbox",
+        "blackbox_chronicle"
+      ]
+    },
+    {
+      "name": "both",
+      "options": {
+        "jsonl": true,
+        "chronicle": true
+      },
+      "modules": [
+        "blackbox",
+        "blackbox_jsonl",
+        "blackbox_chronicle"
       ]
     }
   ]

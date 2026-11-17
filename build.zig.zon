@@ -19,6 +19,13 @@
             .hash = "strand-0.15.0-8LNWVmWyNwBJCxiXMsa5EE8LNwF_9akRcDV19MCCpTJ0",
             .lazy = true,
         },
+        // The chronicle sink's journal, for blackbox_chronicle: fetched only by a build with
+        // `.chronicle = true`.
+        .chronicle = .{
+            .url = "git+https://github.com/pedronaugusto/chronicle#f90b90792957e24193620032b7bb00670025a347",
+            .hash = "chronicle-0.10.0-cnph1Os6EgDAYPvrpqx48psY1CDvkUSvJfz2jSDHTFZg",
+            .lazy = true,
+        },
     },
     .dev_dependencies = .{
         .shakedown = .{

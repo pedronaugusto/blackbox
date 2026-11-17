@@ -14,5 +14,11 @@ All notable changes to blackbox are documented here. The format follows
   or appends to a file that `reopen` opens again by its path after a rotation (`openFailure` says
   why an open failed; the records meanwhile fail and are counted). `blackbox.built_with.jsonl` says
   whether a build has it.
+- `blackbox_chronicle`, the chronicle sink, behind the build option `-Dchronicle` (off by default;
+  with it, chronicle and strand are fetched): `ChronicleSink` appends each record to a
+  `chronicle.Journal(chronicle.Raw)` as the JSON Lines sink's object, the records of a turn of the
+  drain in one `appendAll` (`Options.commit`, `.group` by default), a batch past
+  `Options.batch_bytes` before the turn ends; `lostRecords` and `appendFailure` say what a failed
+  append took. `blackbox.built_with.chronicle` says whether a build has it.
 - The logger flushes every sink after each turn of the drain, after each record rendered at the
   call, and after a producer renders its own ring, so a sink may batch what one of those renders.

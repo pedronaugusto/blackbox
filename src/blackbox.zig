@@ -18,10 +18,11 @@ pub const Text = @import("encode.zig").Text;
 pub const TextSink = @import("sink/text.zig").TextSink;
 pub const std_log = @import("std_log.zig");
 
-/// What this build of blackbox has: `jsonl`, whether the package was built with `.jsonl = true`, and
-/// so whether `@import("blackbox_jsonl")` is there.
-pub const built_with: Features = .{ .jsonl = @import("blackbox_options").jsonl };
-pub const Features = struct { jsonl: bool };
+/// What this build of blackbox has: whether the package was built with `.jsonl = true` and with
+/// `.chronicle = true`, and so whether `@import("blackbox_jsonl")` and
+/// `@import("blackbox_chronicle")` are there.
+pub const built_with: Features = .{ .jsonl = @import("blackbox_options").jsonl, .chronicle = @import("blackbox_options").chronicle };
+pub const Features = struct { jsonl: bool, chronicle: bool };
 
 pub const lint_rules = .{
     .version = 2,
