@@ -180,7 +180,9 @@ fn WideOf(comptime T: type) type {
 fn counted(comptime format: []const u8, v: anytype) usize {
     var buffer: [64]u8 = undefined;
     var d: std.Io.Writer.Discarding = .init(&buffer);
-    d.writer.print(format, .{v}) catch {};
+    d.writer.print(format, .{v}) catch |err| switch (err) {
+        error.WriteFailed => aegis.assert.never("blackbox: a discarding writer failed"),
+    };
     return @intCast(d.fullCount());
 }
 
@@ -384,7 +386,7 @@ fn roundTrip(fields: anytype, limit: usize, buffer: []u8) Iterator {
     const m = measure(fields);
     const size = m.size(limit);
     const r = put(buffer[0..size], fields, &m, limit);
-    std.debug.assert(r.used <= size);
+    aegis.assert.invariant(r.used <= size, "put writes no more than measure gave");
     return .{ .bytes = buffer[0..r.used], .left = r.count };
 }
 

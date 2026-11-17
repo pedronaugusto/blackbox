@@ -17,9 +17,6 @@ pub const Value = @import("encode.zig").Value;
 pub const Text = @import("encode.zig").Text;
 pub const TextSink = @import("sink/text.zig").TextSink;
 pub const std_log = @import("std_log.zig");
-/// The compile-time floors a program sets as `blackbox_options`.
-pub const Options = @import("options.zig").Options;
-pub const ScopeLevel = @import("options.zig").ScopeLevel;
 
 pub const lint_rules = .{
     .version = 2,
@@ -33,6 +30,7 @@ pub const lint_rules = .{
 
 test {
     _ = @import("level.zig");
+    _ = @import("options.zig");
     _ = @import("ids.zig");
     _ = @import("Site.zig");
     _ = @import("encode.zig");

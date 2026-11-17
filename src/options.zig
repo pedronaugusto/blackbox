@@ -1,27 +1,25 @@
-//! The compile-time floors: a record below its scope's floor is not compiled. A program sets them
-//! as it sets `std_options`:
-//!
-//!   pub const blackbox_options: blackbox.Options = .{ .level = .info, .scopes = &.{.{ .scope = .db, .level = .debug }} };
-const builtin = @import("builtin");
-const root = @import("root");
+//! The compile-time floors: a record below its scope's floor is not compiled. They are std's own,
+//! `std_options.log_level` and `std_options.log_scope_levels`, which `std.log` reads, so one setting
+//! serves both. std has no trace level: a floor of `debug`, std's lowest, admits blackbox's trace.
+const std = @import("std");
 const Level = @import("level.zig").Level;
 
-/// One scope's floor.
-pub const ScopeLevel = struct { scope: @EnumLiteral(), level: Level };
-
-pub const Options = struct {
-    /// Every scope's floor but those named: `std.log`'s default, debug in Debug builds, else info.
-    level: Level = if (builtin.mode == .Debug) .debug else .info,
-    scopes: []const ScopeLevel = &.{},
-};
-
-/// The program's options, or the defaults.
-pub const options: Options = if (@hasDecl(root, "blackbox_options")) root.blackbox_options else .{};
+/// The floor every scope not named in `log_scope_levels` has.
+pub const default_floor: Level = fromStd(std.options.log_level);
 
 /// The floor of `scope`.
 pub fn floor(comptime scope: @EnumLiteral()) Level {
-    inline for (options.scopes) |s| {
-        if (s.scope == scope) return s.level;
+    inline for (std.options.log_scope_levels) |s| {
+        if (s.scope == scope) return fromStd(s.level);
     }
-    return options.level;
+    return default_floor;
+}
+
+fn fromStd(comptime level: std.log.Level) Level {
+    return if (level == .debug) .trace else Level.fromStd(level);
+}
+
+test "std's debug floor admits trace" {
+    try std.testing.expectEqual(Level.trace, fromStd(.debug));
+    try std.testing.expectEqual(Level.warn, fromStd(.warn));
 }

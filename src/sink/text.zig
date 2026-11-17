@@ -51,14 +51,14 @@ pub const TextSink = struct {
 pub fn render(w: *std.Io.Writer, record: *const Record, options: TextSink.Options) std.Io.Writer.Error!void {
     const t: Terminal = .{ .writer = w, .mode = options.color };
     const offset: ?almanac.Offset = if (options.zone) |zone| zone.offsetAt(record.at) catch null else null;
-    color(t, .dim);
+    try color(t, .dim);
     almanac.text.writeTimestamp(w, record.at, offset) catch |err| switch (err) {
         error.WriteFailed => return error.WriteFailed,
         else => try w.print("{d}", .{record.at.raw()}),
     };
-    color(t, .reset);
+    try color(t, .reset);
     try w.writeByte(' ');
-    color(t, switch (record.level) {
+    try color(t, switch (record.level) {
         .trace => .bright_black,
         .debug => .blue,
         .info => .green,
@@ -66,7 +66,7 @@ pub fn render(w: *std.Io.Writer, record: *const Record, options: TextSink.Option
         .err => .red,
     });
     try w.writeAll(record.level.label());
-    color(t, .reset);
+    try color(t, .reset);
     try w.writeByte(' ');
     try w.writeAll(record.scope);
     try w.writeAll(": ");
@@ -74,10 +74,10 @@ pub fn render(w: *std.Io.Writer, record: *const Record, options: TextSink.Option
     var it = record.fields();
     while (it.next()) |field| {
         try w.writeByte(' ');
-        color(t, .dim);
+        try color(t, .dim);
         try key(w, field.name);
         try w.writeByte('=');
-        color(t, .reset);
+        try color(t, .reset);
         try value(w, field.value);
     }
     if (record.trace) |trace| {
@@ -91,9 +91,11 @@ pub fn render(w: *std.Io.Writer, record: *const Record, options: TextSink.Option
     try w.writeByte('\n');
 }
 
-fn color(t: Terminal, c: Terminal.Color) void {
-    // A colour that cannot be set is left out; the line is written all the same.
-    t.setColor(c) catch {};
+/// A colour, or with no colour mode nothing; a colour that cannot be set fails the write.
+fn color(t: Terminal, c: Terminal.Color) std.Io.Writer.Error!void {
+    t.setColor(c) catch |err| switch (err) {
+        error.WriteFailed, error.Canceled, error.Unexpected => return error.WriteFailed,
+    };
 }
 
 fn key(w: *std.Io.Writer, name: []const u8) std.Io.Writer.Error!void {

@@ -1,0 +1,18 @@
+{
+  "seams": [
+    {
+      "file": "src/Record.zig",
+      "rules": [
+        "P007"
+      ],
+      "reason": "a queued record holds its site's address and its scope's as integers in the ring's bytes (a site is a compile-time constant, a scope a compile-time name, both static), read back as the pointers they were"
+    },
+    {
+      "file": "src/encode.zig",
+      "rules": [
+        "P007"
+      ],
+      "reason": "an encoded field holds its name's address and length as integers (a field's name is a compile-time constant, static), read back as the slice it was"
+    }
+  ]
+}

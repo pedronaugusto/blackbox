@@ -16,7 +16,7 @@ const ids = @import("ids.zig");
 const Site = @import("Site.zig");
 const encode = @import("encode.zig");
 const Core = @import("Core.zig");
-const default_floor = @import("options.zig").options.level;
+const default_floor = @import("options.zig").default_floor;
 
 /// The inline buffer's bytes.
 pub const field_bytes = 512;
@@ -34,8 +34,8 @@ id: ids.SpanId,
 parent: ?ids.SpanId,
 /// When it began, by the wall clock: the time its record shows.
 start: almanac.Timestamp,
-/// When it began, by the monotonic clock, in nanoseconds: its duration's start.
-started: i96,
+/// When it began, by the monotonic clock: its duration's start.
+started: Monotonic,
 fields: [field_bytes]u8 = undefined,
 used: usize = 0,
 count: u16 = 0,
@@ -44,6 +44,12 @@ ended: bool = false,
 
 /// The duration a span's record carries.
 pub const Duration = aegis.units.Duration(.nanosecond, i96);
+/// An instant of the monotonic clock, which a wall-clock step never moves.
+pub const Monotonic = aegis.units.Instant(.awake, .nanosecond, i96);
+
+fn monotonic(io: Io) Monotonic {
+    return Monotonic.fromTimestamp(Io.Clock.awake.now(io), .exact);
+}
 
 pub fn begin(target: Core.Target, io: Io, level: Level, scope: []const u8, site: ?*const Site, trace_id: ?ids.TraceId, parent: ?ids.SpanId, fields: anytype) Span {
     var span: Span = .{
@@ -55,7 +61,7 @@ pub fn begin(target: Core.Target, io: Io, level: Level, scope: []const u8, site:
         .id = ids.newSpan(io),
         .parent = parent,
         .start = almanac.now(io),
-        .started = Io.Clock.awake.now(io).nanoseconds,
+        .started = monotonic(io),
     };
     span.record(fields);
     return span;
@@ -120,8 +126,8 @@ pub fn end(span: *Span, io: Io) void {
     if (!site.level.passes(logger.level.load(.monotonic))) return;
     const protection = io.swapCancelProtection(.blocked);
     defer _ = io.swapCancelProtection(protection);
-    const took = @max(0, Io.Clock.awake.now(io).nanoseconds - span.started);
-    span.add(.{ .duration = Duration.fromRaw(took) }, field_bytes);
+    const took = span.started.saturatingDurationTo(monotonic(io));
+    span.add(.{ .duration = if (took.compare(.fromRaw(0)) == .lt) Duration.fromRaw(0) else took }, field_bytes);
     if (span.parent) |parent| span.add(.{ .parent = parent.raw() }, field_bytes);
     const raw: Core.Raw = .{
         .head = .{ .site = site, .at = span.start, .trace = span.trace_id, .span = span.id, .scope = span.scope },

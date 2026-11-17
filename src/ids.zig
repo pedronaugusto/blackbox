@@ -17,7 +17,8 @@ pub fn newTrace(io: std.Io) TraceId {
     while (true) {
         var bytes: [16]u8 = undefined;
         io.random(&bytes);
-        return TraceId.fromRaw(std.mem.readInt(u128, &bytes, .big)) catch continue;
+        const raw = std.mem.readInt(u128, &bytes, .big);
+        if (raw != 0) return TraceId.fromRaw(raw) catch aegis.assert.never("blackbox: a nonzero id is refused");
     }
 }
 
@@ -26,7 +27,8 @@ pub fn newSpan(io: std.Io) SpanId {
     while (true) {
         var bytes: [8]u8 = undefined;
         io.random(&bytes);
-        return SpanId.fromRaw(std.mem.readInt(u64, &bytes, .big)) catch continue;
+        const raw = std.mem.readInt(u64, &bytes, .big);
+        if (raw != 0) return SpanId.fromRaw(raw) catch aegis.assert.never("blackbox: a nonzero id is refused");
     }
 }
 

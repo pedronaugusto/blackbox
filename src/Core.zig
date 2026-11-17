@@ -121,7 +121,7 @@ dropped_reported: aegis.Atomic(Records) = .init(.fromRaw(0)),
 cut: aegis.Atomic(Records) = .init(.fromRaw(0)),
 
 pub fn init(gpa: Allocator, sinks: []const *Sink, options: Options) error{OutOfMemory}!Core {
-    aegis.assert.invariant(options.max_record.raw() >= 1024, "blackbox: max_record is at least 1 KiB");
+    aegis.assert.invariant(options.max_record.compare(.literal("1KiB")) != .lt, "blackbox: max_record is at least 1 KiB");
     const slots = try gpa.alloc(Slot, sinks.len);
     errdefer gpa.free(slots);
     for (slots, sinks) |*slot, sink| slot.* = .{ .sink = .init(sink) };
@@ -134,6 +134,10 @@ pub fn init(gpa: Allocator, sinks: []const *Sink, options: Options) error{OutOfM
     const ring = try gpa.alloc(u8, capacity);
     errdefer gpa.free(ring);
     const local = try gpa.alloc(u8, capacity);
+    errdefer gpa.free(local);
+    // The shared queue is always a source of the drain's turns.
+    var sources: std.ArrayList(Source) = try .initCapacity(gpa, 1);
+    errdefer sources.deinit(gpa);
     return .{
         .gpa = gpa,
         .slots = slots,
@@ -141,7 +145,7 @@ pub fn init(gpa: Allocator, sinks: []const *Sink, options: Options) error{OutOfM
         .level = .init(options.level),
         .scratch = .init(scratch),
         .shared = .init(.{ .bytes = ring }),
-        .consumer = .init(.{ .local = local }),
+        .consumer = .init(.{ .local = local, .sources = sources }),
     };
 }
 
@@ -265,7 +269,8 @@ pub const Raw = struct {
 };
 
 fn payloadLimit(core: *const Core) usize {
-    return core.options.max_record.raw() - Record.header_bytes;
+    const limit = core.options.max_record.sub(.fromRaw(Record.header_bytes)) catch aegis.assert.never("max_record is at least 1 KiB, past a header");
+    return limit.raw();
 }
 
 /// A record ready to be written wherever it goes.
@@ -294,7 +299,6 @@ pub fn Encoded(comptime Fields: type) type {
 
 /// Renders a record at the call, through the scratch buffer.
 pub fn renderNow(core: *Core, io: Io, encoded: anytype) void {
-    comptime std.debug.assert(@typeInfo(@TypeOf(encoded)) == .pointer);
     var scratch = core.scratch.acquireUncancelable(io);
     defer scratch.deinit(io);
     const w = encoded.write(scratch.value().*);
@@ -337,7 +341,11 @@ fn enqueue(core: *Core, io: Io, encoded: anytype) void {
             },
             .block => {
                 core.work.signal(io);
-                shared.waitUncancelable(&core.room, io, .none) catch {};
+                if (!core.waitRoom(&shared, io)) {
+                    core.countDropped();
+                    shared.deinit(io);
+                    return;
+                }
             },
         }
     }
@@ -359,16 +367,35 @@ pub fn draining(core: *const Core) bool {
     return core.state.load(.seq_cst) == .running;
 }
 
-/// Waits for room in a full producer's ring while the drain runs; false once it does not.
-pub fn waitForRoom(core: *Core, io: Io, p: *Ring, len: usize) bool {
+/// What a wait for room in a full ring came to.
+pub const Room = enum {
+    /// The record fits now.
+    fits,
+    /// The drain stopped: the caller renders at the call.
+    stopped,
+    /// No wait was possible (the condition's waiter limit): the caller drops the record.
+    refused,
+};
+
+/// Waits for room in a full producer's ring while the drain runs.
+pub fn waitForRoom(core: *Core, io: Io, p: *Ring, len: usize) Room {
     var shared = core.shared.acquireUncancelable(io);
     defer shared.deinit(io);
     while (core.state.load(.seq_cst) == .running) {
-        if (p.fits(len)) return true;
+        if (p.fits(len)) return .fits;
         core.work.signal(io);
-        shared.waitUncancelable(&core.room, io, .none) catch {};
+        if (!core.waitRoom(&shared, io)) return .refused;
     }
-    return false;
+    return .stopped;
+}
+
+/// Waits on `room` with the shared queue's lock held; false when the waiter limit refuses the wait.
+fn waitRoom(core: *Core, shared: *aegis.BlockingGuarded(Shared).Guard, io: Io) bool {
+    shared.waitUncancelable(&core.room, io, .none) catch |err| switch (err) {
+        error.Timeout => aegis.assert.never("blackbox: a wait with no deadline timed out"),
+        error.WaiterLimit => return false,
+    };
+    return true;
 }
 
 /// Renders a producer's ring with no drain to read it: after the drain stopped, its owner's.
@@ -426,7 +453,8 @@ pub fn drain(core: *Core, io: Io) Io.Cancelable!void {
                     core.turn(io);
                     return error.Canceled;
                 },
-                else => {},
+                error.Timeout => aegis.assert.never("blackbox: a wait with no deadline timed out"),
+                error.WaiterLimit => aegis.assert.never("blackbox: the drain is the one task waiting for work"),
             };
         }
         core.sleep.store(.awake, .seq_cst);
@@ -537,8 +565,9 @@ const failed_site = Site.of(.err, .blackbox, "sink failed");
 fn reportDropped(core: *Core, io: Io) void {
     const now = core.dropped.load(.monotonic);
     const before = core.dropped_reported.swap(now, .monotonic);
-    if (now.raw() == before.raw()) return;
-    core.renderInternal(io, dropped_site, .{ .dropped = now.raw() - before.raw() }, null);
+    if (now.eql(before)) return;
+    const since = now.sub(before) catch aegis.assert.never("blackbox: the dropped count only grows");
+    core.renderInternal(io, dropped_site, .{ .dropped = since.raw() }, null);
 }
 
 /// A record of blackbox's own, rendered at once to every sink but `skip`.
@@ -552,7 +581,7 @@ fn renderInternal(core: *Core, io: Io, site: *const Site, fields: anytype, skip:
         if (skip == i) continue;
         var sink = slot.sink.acquireUncancelable(io);
         defer sink.deinit(io);
-        sink.value().*.write(io, &record) catch {};
+        sink.value().*.write(io, &record) catch |err| core.countFailure(slot, err);
     }
 }
 
@@ -570,10 +599,16 @@ pub fn renderAll(core: *Core, io: Io, record: *const Record) void {
     }
 }
 
-/// Counts a sink's failure; the first of a run of them is reported to the other sinks.
-fn failed(core: *Core, io: Io, slot: *Slot, err: Sink.WriteError) void {
+/// Counts a sink's failure.
+fn countFailure(core: *Core, slot: *Slot, err: Sink.WriteError) void {
+    _ = core;
     _ = slot.failures.fetchAddWrapping(.fromRaw(1), .monotonic);
     _ = slot.first.cmpxchgStrong(.none, @fromBackingInt(@intCast(@intFromError(err))), .monotonic, .monotonic);
+}
+
+/// Counts a sink's failure; the first of a run of them is reported to the other sinks.
+fn failed(core: *Core, io: Io, slot: *Slot, err: Sink.WriteError) void {
+    core.countFailure(slot, err);
     if (slot.health.swap(.failing, .monotonic) == .failing) return;
     const index = (@intFromPtr(slot) - @intFromPtr(core.slots.ptr)) / @sizeOf(Slot);
     core.renderInternal(io, failed_site, .{ .sink = index, .@"error" = err }, index);
@@ -629,9 +664,13 @@ pub const Ring = struct {
             }
             switch (core.options.delivery.queued.when_full) {
                 .drop => return core.countDropped(),
-                .block => if (!core.waitForRoom(io, r, len)) {
-                    core.renderOwn(io, r);
-                    return core.renderNow(io, encoded);
+                .block => switch (core.waitForRoom(io, r, len)) {
+                    .fits => {},
+                    .refused => return core.countDropped(),
+                    .stopped => {
+                        core.renderOwn(io, r);
+                        return core.renderNow(io, encoded);
+                    },
                 },
             }
         }
@@ -647,7 +686,7 @@ pub const Ring = struct {
 
     /// Whether the ring holds a record the drain has not rendered.
     pub fn holds(r: *const Ring) bool {
-        return r.head.load(.seq_cst).raw() != r.tail.load(.seq_cst).raw();
+        return !r.head.load(.seq_cst).eql(r.tail.load(.seq_cst));
     }
 
     pub fn headPosition(r: *const Ring) u64 {
