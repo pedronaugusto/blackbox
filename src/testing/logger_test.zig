@@ -196,11 +196,26 @@ const Run = struct {
     per_task: usize,
     rings: u64,
     stop_after: Io.Duration,
+    /// Whether the drain runs until every task is done and every record rendered: then nothing
+    /// may wait for the drain's stop to be rendered.
+    settle: bool,
+    /// Records rendered before the drain was canceled.
+    before_stop: usize = 0,
 
     fn main(run: *Run, io: Io) void {
         var drainer = io.concurrent(Logger.drain, .{ &run.logger, io }) catch @panic("no concurrency");
         var group: Io.Group = .init;
         for (0..run.tasks) |t| group.concurrent(io, task, .{ run, io, t }) catch @panic("no concurrency");
+        if (run.settle) {
+            group.await(io) catch {};
+            // A second of simulated time is ample for a drain that is awake.
+            var waited: usize = 0;
+            while (run.collect.seen.items.len < run.tasks * run.per_task and waited < 1000) : (waited += 1)
+                io.sleep(.fromMilliseconds(1), .awake) catch {};
+            run.before_stop = run.collect.seen.items.len;
+            drainer.cancel(io) catch {};
+            return;
+        }
         io.sleep(run.stop_after, .awake) catch {};
         drainer.cancel(io) catch {};
         group.await(io) catch {};
@@ -217,9 +232,9 @@ const Run = struct {
     }
 };
 
-test "logger: every record once per sink or counted dropped, each task's order kept, the drain stopping anywhere" {
+test "logger: every record once per sink or counted dropped, each task's order kept, the drain stopping anywhere, and rendered while it runs" {
     const gpa = testing.allocator;
-    for (0..48) |seed| for ([_]bool{ false, true }) |drop| {
+    for (0..48) |seed| for ([_]bool{ false, true }) |drop| for ([_]bool{ false, true }) |settle| {
         var prng: std.Random.DefaultPrng = .init(seed);
         const r = prng.random();
         var run: Run = .{
@@ -229,6 +244,7 @@ test "logger: every record once per sink or counted dropped, each task's order k
             .per_task = r.intRangeAtMost(usize, 1, 40),
             .rings = r.int(u64),
             .stop_after = .fromNanoseconds(r.intRangeAtMost(i96, 0, 200_000)),
+            .settle = settle,
         };
         defer run.collect.deinit();
         run.logger = try .init(gpa, &.{&run.collect.sink}, .{ .max_record = .literal("1KiB"), .delivery = .{ .queued = .{ .capacity = .literal("1KiB"), .when_full = if (drop) .drop else .block } } });
@@ -249,5 +265,7 @@ test "logger: every record once per sink or counted dropped, each task's order k
         const dropped = run.logger.status().dropped.raw();
         try testing.expectEqual(run.tasks * run.per_task, rendered + dropped);
         if (!drop) try testing.expectEqual(@as(u64, 0), dropped);
+        // A running drain renders what is queued without being stopped.
+        if (settle and !drop) try testing.expectEqual(run.tasks * run.per_task, run.before_stop);
     };
 }
