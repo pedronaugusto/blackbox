@@ -67,6 +67,16 @@ pub const SinkStatus = struct {
 /// Records logged through `std.log` with no logger installed: the `std.log` backend counts them.
 pub var before_install: aegis.Atomic(Records) = .init(.fromRaw(0));
 
+/// Where a test may make delivery let another task run (`aegis.points.yield`): between a call's
+/// look at the drain's state and the step that acts on it, where a drain stopping in between is
+/// what the locked recheck and the producer's second look are for. Inert outside a test build.
+pub const Point = enum {
+    /// A call found the drain running and has not yet taken the shared queue's lock.
+    queued_after_state_check,
+    /// A producer found the drain running and has not yet published its record.
+    ring_after_state_check,
+};
+
 const DrainState = enum(u8) { idle, running, stopped };
 const Sleep = enum(u8) { awake, asleep };
 const ErrorCode = enum(u16) { none = 0, _ };
@@ -299,12 +309,15 @@ pub fn Encoded(comptime Fields: type) type {
 
 /// Renders a record at the call, through the scratch buffer.
 pub fn renderNow(core: *Core, io: Io, encoded: anytype) void {
-    var scratch = core.scratch.acquireUncancelable(io);
-    defer scratch.deinit(io);
-    const w = encoded.write(scratch.value().*);
-    if (w.cut) core.countCut();
-    const record = Record.read(scratch.value().*[0..w.used]);
-    core.renderAll(io, &record);
+    {
+        var scratch = core.scratch.acquireUncancelable(io);
+        defer scratch.deinit(io);
+        const w = encoded.write(scratch.value().*);
+        if (w.cut) core.countCut();
+        const record = Record.read(scratch.value().*[0..w.used]);
+        core.renderAll(io, &record);
+    }
+    core.flushSinks(io);
 }
 
 pub fn countCut(core: *Core) void {
@@ -317,14 +330,15 @@ pub fn countDropped(core: *Core) void {
 
 /// Into the shared queue, or rendered at the call when no drain runs.
 fn enqueue(core: *Core, io: Io, encoded: anytype) void {
-    if (core.state.load(.seq_cst) != .running) return core.renderNow(io, encoded);
+    if (core.state.load(.seq_cst) != .running) return core.renderAfterQueued(io, encoded);
+    aegis.points.yield(Point.queued_after_state_check);
     const len = encoded.len();
     var shared = core.shared.acquireUncancelable(io);
     while (true) {
         const s = shared.value();
         if (core.state.load(.seq_cst) != .running) {
             shared.deinit(io);
-            return core.renderNow(io, encoded);
+            return core.renderAfterQueued(io, encoded);
         }
         if (queue.place(s.bytes.len, s.head, s.tail, len)) |p| {
             if (p.skipped) queue.markSkip(s.bytes, s.tail);
@@ -351,6 +365,14 @@ fn enqueue(core: *Core, io: Io, encoded: anytype) void {
     }
     core.work.signal(io);
     shared.deinit(io);
+}
+
+/// Rendered at the call once no drain runs, after what the queues still hold: a drain that stopped
+/// may not have taken its last turn yet, and the caller's own records queued before this one come
+/// first. Once the drain stopped, its last turn has rendered them or this turn does.
+fn renderAfterQueued(core: *Core, io: Io, encoded: anytype) void {
+    core.turn(io);
+    core.renderNow(io, encoded);
 }
 
 /// Wakes the drain if it sleeps: called by a producer after it writes, with no lock held.
@@ -402,11 +424,14 @@ fn waitRoom(core: *Core, shared: *aegis.BlockingGuarded(Shared).Guard, io: Io) b
 pub fn renderOwn(core: *Core, io: Io, p: *Ring) void {
     var consumer = core.consumer.acquireUncancelable(io);
     defer consumer.deinit(io);
+    var rendered = false;
     while (p.next()) |bytes| {
         const record = Record.read(bytes.record);
         core.renderAll(io, &record);
         p.consumed(bytes.after);
+        rendered = true;
     }
+    if (rendered) core.flushSinks(io);
 }
 
 /// Releases a producer: the drain renders what it holds and frees it, or with no drain running,
@@ -475,10 +500,20 @@ pub fn flush(core: *Core, io: Io) void {
     const protection = io.swapCancelProtection(.blocked);
     defer _ = io.swapCancelProtection(protection);
     core.turn(io);
+    core.flushSinks(io);
+}
+
+/// Has every sink hand on what it buffered: after a turn, a record rendered at the call, or a
+/// producer's own records, so a sink may batch what one of those renders (the chronicle sink's one
+/// append per turn) and each record has been handed on when what rendered it returns.
+fn flushSinks(core: *Core, io: Io) void {
     for (core.slots) |*slot| {
-        var sink = slot.sink.acquireUncancelable(io);
-        defer sink.deinit(io);
-        sink.value().*.flush(io) catch |err| core.failed(io, slot, err);
+        const result = blk: {
+            var sink = slot.sink.acquireUncancelable(io);
+            defer sink.deinit(io);
+            break :blk sink.value().*.flush(io);
+        };
+        result catch |err| core.failed(io, slot, err);
     }
 }
 
@@ -513,7 +548,7 @@ fn turn(core: *Core, io: Io) void {
             consumer.sources.appendAssumeCapacity(.{ .ring = p, .bytes = p.bytes, .head = p.headPosition(), .tail = p.tailPosition() });
         }
     }
-    core.reportDropped(io);
+    var rendered = core.reportDropped(io);
     const sources = consumer.sources.items;
     while (true) {
         var pick: ?usize = null;
@@ -533,7 +568,9 @@ fn turn(core: *Core, io: Io) void {
         core.renderAll(io, &record);
         s.head = r.after;
         if (s.ring) |p| p.consumed(r.after);
+        rendered = true;
     }
+    if (rendered) core.flushSinks(io);
     if (sources.len > 1) {
         var shared_guard = core.shared.acquireUncancelable(io);
         defer shared_guard.deinit(io);
@@ -561,13 +598,14 @@ fn recordAt(s: *const Source) struct { record: []const u8, after: u64 } {
 const dropped_site = Site.of(.warn, .blackbox, "records dropped");
 const failed_site = Site.of(.err, .blackbox, "sink failed");
 
-/// A record of the drops since the last one, when there were any.
-fn reportDropped(core: *Core, io: Io) void {
+/// A record of the drops since the last one, when there were any; whether it wrote one.
+fn reportDropped(core: *Core, io: Io) bool {
     const now = core.dropped.load(.monotonic);
     const before = core.dropped_reported.swap(now, .monotonic);
-    if (now.eql(before)) return;
+    if (now.eql(before)) return false;
     const since = now.sub(before) catch aegis.assert.never("blackbox: the dropped count only grows");
     core.renderInternal(io, dropped_site, .{ .dropped = since.raw() }, null);
+    return true;
 }
 
 /// A record of blackbox's own, rendered at once to every sink but `skip`.
@@ -659,6 +697,7 @@ pub const Ring = struct {
                 if (place.skipped) queue.markSkip(r.bytes, tail);
                 const w = encoded.write(r.bytes[place.offset..][0..len]);
                 if (w.cut) core.countCut();
+                aegis.points.yield(Point.ring_after_state_check);
                 r.tail.store(.fromRaw(place.start + queue.aligned(w.used)), .seq_cst);
                 break;
             }

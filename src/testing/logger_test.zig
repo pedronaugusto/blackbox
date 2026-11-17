@@ -7,6 +7,9 @@ const Io = std.Io;
 const testing = std.testing;
 const blackbox = @import("../blackbox.zig");
 const shakedown = @import("shakedown");
+const gen = shakedown.gen;
+const aegis = @import("aegis");
+const Core = @import("../Core.zig");
 const Logger = blackbox.Logger;
 
 /// A sink that keeps what each record says, or fails when told to.
@@ -16,6 +19,8 @@ const Collect = struct {
     seen: std.ArrayList(Seen) = .empty,
     lines: std.Io.Writer.Allocating,
     failing: bool = false,
+    /// How many records it had seen when it was last flushed.
+    flushed: usize = 0,
 
     const Seen = struct { task: u64, seq: u64, level: blackbox.Level, message: []const u8, span: ?u64, trace: ?u128 };
     const vtable: blackbox.Sink.VTable = .{ .write = write, .flush = flush };
@@ -44,8 +49,9 @@ const Collect = struct {
     }
 
     fn flush(sink: *blackbox.Sink, io: Io) blackbox.Sink.WriteError!void {
-        _ = sink;
         _ = io;
+        const c: *Collect = @fieldParentPtr("sink", sink);
+        c.flushed = c.seen.items.len;
     }
 
     fn text(c: *Collect) []const u8 {
@@ -244,42 +250,127 @@ const Run = struct {
     }
 };
 
-test "logger: every record once per sink or counted dropped, each task's order kept, the drain stopping anywhere, and rendered while it runs" {
+/// One case of the delivery property: its shape drawn from the case, its schedule the case's
+/// simulation's, and the core's yield points (`Core.Point`) under the case's driver, so a drain
+/// stopping between a call's look at its state and the call's next step is a schedule the case
+/// draws, not a thread race.
+fn delivery(_: void, case: *shakedown.Case) !void {
+    const s = case.source;
     const gpa = testing.allocator;
-    for (0..64) |seed| for ([_]bool{ false, true }) |drop| for ([_]bool{ false, true }) |settle| {
-        var prng: std.Random.DefaultPrng = .init(seed);
-        const r = prng.random();
-        var run: Run = .{
-            .logger = undefined,
-            .collect = .init(gpa),
-            .tasks = r.intRangeAtMost(usize, 1, 4),
-            .per_task = r.intRangeAtMost(usize, 1, 40),
-            .rings = r.int(u64),
-            .stop_after = .fromNanoseconds(r.intRangeAtMost(i96, 0, 200_000)),
-            .settle = settle,
-        };
-        defer run.collect.deinit();
-        run.logger = try .init(gpa, &.{&run.collect.sink}, .{ .max_record = .literal("1KiB"), .delivery = .{ .queued = .{ .capacity = .literal("1KiB"), .when_full = if (drop) .drop else .block } } });
-        defer run.logger.deinit(testing.io);
-        const sim = try shakedown.Sim.init(gpa, .{ .executor = .threads, .seed = seed, .yield_per_million = 200_000 });
-        defer sim.deinit();
-        try testing.expectEqual(shakedown.Sim.Outcome.finished, sim.run(Run.main, .{ &run, sim.io() }));
-        var next: [4]u64 = @splat(0);
-        var rendered: usize = 0;
-        for (run.collect.seen.items) |s| {
-            if (!std.mem.eql(u8, s.message, "r")) continue;
-            // In order, none twice; with drops, gaps.
-            try testing.expect(s.seq >= next[s.task]);
-            if (!drop) try testing.expectEqual(next[s.task], s.seq);
-            next[s.task] = s.seq + 1;
-            rendered += 1;
-        }
-        const dropped = run.logger.status().dropped.raw();
-        try testing.expectEqual(run.tasks * run.per_task, rendered + dropped);
-        if (!drop) try testing.expectEqual(@as(u64, 0), dropped);
-        // A running drain renders what is queued without being stopped.
-        if (settle and !drop) try testing.expectEqual(run.tasks * run.per_task, run.before_stop);
+    const drop = gen.boolean(s);
+    var run: Run = .{
+        .logger = undefined,
+        .collect = .init(gpa),
+        .tasks = gen.intRange(s, usize, 1, 4),
+        .per_task = gen.intRange(s, usize, 1, 40),
+        .rings = gen.int(s, u64),
+        .stop_after = .fromNanoseconds(gen.intRange(s, u32, 0, 200_000)),
+        .settle = gen.boolean(s),
     };
+    defer run.collect.deinit();
+    run.logger = try .init(gpa, &.{&run.collect.sink}, .{ .max_record = .literal("1KiB"), .delivery = .{ .queued = .{ .capacity = .literal("1KiB"), .when_full = if (drop) .drop else .block } } });
+    defer run.logger.deinit(testing.io);
+    const sim = try case.sim(.{ .executor = .threads, .yield_per_million = 200_000 });
+    try testing.expectEqual(shakedown.Sim.Outcome.finished, sim.run(Run.main, .{ &run, sim.io() }));
+    try expectDelivered(&run, drop);
+}
+
+/// What every run delivers: each record once per sink or counted dropped, each task's records in
+/// order, and every record handed on.
+fn expectDelivered(run: *Run, drop: bool) !void {
+    var next: [4]u64 = @splat(0);
+    var rendered: usize = 0;
+    for (run.collect.seen.items) |seen| {
+        if (!std.mem.eql(u8, seen.message, "r")) continue;
+        // In order, none twice; with drops, gaps.
+        try testing.expect(seen.seq >= next[seen.task]);
+        if (!drop) try testing.expectEqual(next[seen.task], seen.seq);
+        next[seen.task] = seen.seq + 1;
+        rendered += 1;
+    }
+    const dropped = run.logger.status().dropped.raw();
+    try testing.expectEqual(run.tasks * run.per_task, rendered + dropped);
+    if (!drop) try testing.expectEqual(@as(u64, 0), dropped);
+    // A running drain renders what is queued without being stopped.
+    if (run.settle and !drop) try testing.expectEqual(run.tasks * run.per_task, run.before_stop);
+    // Every record was handed on: a sink was flushed after the turn, the call or the owner's
+    // rendering that wrote it.
+    try testing.expectEqual(run.collect.seen.items.len, run.collect.flushed);
+}
+
+test "logger: every record once per sink or counted dropped, each task's order kept, the drain stopping anywhere, and rendered while it runs" {
+    try shakedown.check(testing.allocator, {}, delivery, .{ .cases = 256, .seed = 0xb1ac0, .points = &.{aegis.points.list(Core.Point)} });
+}
+
+/// The smallest shape of the stop's race, every schedule of it: one task logging two records, through
+/// the shared queue or its own ring, while the drain is canceled.
+fn stopRace(own: bool, case: *shakedown.Case) !void {
+    const gpa = testing.allocator;
+    var run: Run = .{ .logger = undefined, .collect = .init(gpa), .tasks = 1, .per_task = 2, .rings = @intFromBool(own), .stop_after = .fromNanoseconds(0), .settle = false };
+    defer run.collect.deinit();
+    run.logger = try .init(gpa, &.{&run.collect.sink}, .{ .delivery = .{ .queued = .{} } });
+    defer run.logger.deinit(testing.io);
+    const sim = try case.sim(.{});
+    try testing.expectEqual(shakedown.Sim.Outcome.finished, sim.run(Run.main, .{ &run, sim.io() }));
+    try expectDelivered(&run, false);
+}
+
+/// The stop's race under the core's yield points. A task logs a few records, through the shared
+/// queue or its own ring, and just before its last one wakes the main task, which cancels the
+/// drain the next time it runs. Nothing else lets main run before that record is written but a
+/// yield at one of the core's points (`Core.Point`), so a case whose point fires puts the cancel
+/// and the drain's last turn between the call's look at the drain's state and its next step:
+/// the step a missing recheck gets wrong.
+const StopRace = struct {
+    logger: Logger,
+    collect: Collect,
+    own: bool,
+    records: usize,
+    last: Io.Event = .unset,
+
+    fn main(r: *StopRace, io: Io) void {
+        var drainer = io.concurrent(Logger.drain, .{ &r.logger, io }) catch @panic("no concurrency");
+        while (!r.logger.core.draining()) io.sleep(.fromNanoseconds(1), .awake) catch {};
+        var logging = io.concurrent(StopRace.task, .{ r, io }) catch @panic("no concurrency");
+        r.last.waitUncancelable(io);
+        drainer.cancel(io) catch |err| switch (err) {
+            error.Canceled => {},
+        };
+        logging.await(io);
+    }
+
+    fn task(r: *StopRace, io: Io) void {
+        const producer = if (r.own) r.logger.producer(io, testing.allocator, .literal("1KiB")) catch @panic("OOM") else null;
+        for (0..r.records) |seq| {
+            if (seq + 1 == r.records) r.last.set(io);
+            if (producer) |p| p.scoped(.sim).info(io, "r", .{ .task = 0, .seq = seq }) else r.logger.scoped(.sim).info(io, "r", .{ .task = 0, .seq = seq });
+        }
+        if (producer) |p| p.release(io);
+    }
+};
+
+fn stopRaceAtPoints(_: void, case: *shakedown.Case) !void {
+    const s = case.source;
+    var r: StopRace = .{ .logger = undefined, .collect = .init(testing.allocator), .own = gen.boolean(s), .records = gen.intRange(s, usize, 1, 3) };
+    defer r.collect.deinit();
+    r.logger = try .init(testing.allocator, &.{&r.collect.sink}, .{ .delivery = .{ .queued = .{} } });
+    defer r.logger.deinit(testing.io);
+    const sim = try case.sim(.{});
+    try testing.expectEqual(shakedown.Sim.Outcome.finished, sim.run(StopRace.main, .{ &r, sim.io() }));
+    try testing.expectEqual(r.records, r.collect.seen.items.len);
+    for (r.collect.seen.items, 0..) |seen, seq| try testing.expectEqual(@as(u64, seq), seen.seq);
+    try testing.expectEqual(r.collect.seen.items.len, r.collect.flushed);
+}
+
+test "logger: a drain stopping at a call's yield point strands and reorders nothing" {
+    try shakedown.check(testing.allocator, {}, stopRaceAtPoints, .{ .cases = 1024, .seed = 0x5709, .points = &.{aegis.points.list(Core.Point)} });
+}
+
+test "logger: under every schedule of a stop beside a call, no record is stranded or reordered" {
+    for ([_]bool{ false, true }) |own| {
+        const searched = try shakedown.explore(testing.allocator, own, stopRace, .{});
+        try testing.expect(searched.complete);
+    }
 }
 
 test "logger: a turn renders every ring's records in time order" {
@@ -377,7 +468,51 @@ test "logger: a record a stopped drain left in a ring is rendered by flush, and 
     logger.core.state.store(.stopped, .seq_cst);
     b.release(io);
     try testing.expectEqual(@as(usize, 3), c.seen.items.len);
+    // What the owner rendered at its release was handed on.
+    try testing.expectEqual(@as(usize, 3), c.flushed);
     try testing.expectEqual(@as(u64, 1), c.seen.items[2].seq);
+}
+
+test "logger: a call after the drain stopped renders what the shared queue still holds first" {
+    const io = testing.io;
+    var c: Collect = .init(testing.allocator);
+    defer c.deinit();
+    var logger: Logger = try .init(testing.allocator, &.{&c.sink}, .{ .delivery = .{ .queued = .{} } });
+    defer logger.deinit(io);
+    // Queued while a drain ran, which stopped before its last turn took it.
+    logger.core.state.store(.running, .seq_cst);
+    logger.scoped(.t).info(io, "r", .{ .task = 0, .seq = 0 });
+    logger.core.state.store(.stopped, .seq_cst);
+    logger.scoped(.t).info(io, "r", .{ .task = 0, .seq = 1 });
+    try testing.expectEqual(@as(usize, 2), c.seen.items.len);
+    for (c.seen.items, 0..) |seen, seq| try testing.expectEqual(@as(u64, seq), seen.seq);
+}
+
+test "logger: a turn that renders only the record of drops still hands it on" {
+    const io = testing.io;
+    var c: Collect = .init(testing.allocator);
+    defer c.deinit();
+    var logger: Logger = try .init(testing.allocator, &.{&c.sink}, .{ .delivery = .{ .queued = .{ .when_full = .drop } } });
+    defer logger.deinit(io);
+    var drainer = try io.concurrent(Logger.drain, .{ &logger, io });
+    defer drainer.cancel(io) catch |err| switch (err) {
+        error.Canceled => {},
+    };
+    // A drop with nothing queued: the next turn the drain takes renders the report alone.
+    logger.core.countDropped();
+    var seen: usize = 0;
+    var flushed: usize = 0;
+    for (0..2000) |_| {
+        logger.core.wake(io);
+        io.sleep(.fromMilliseconds(1), .awake) catch {};
+        var sink = logger.core.slots[0].sink.acquireUncancelable(io);
+        defer sink.deinit(io);
+        seen = c.seen.items.len;
+        flushed = c.flushed;
+        if (seen == 1 and flushed == 1) break;
+    }
+    try testing.expectEqual(@as(usize, 1), seen);
+    try testing.expectEqual(@as(usize, 1), flushed);
 }
 
 fn stress(logger: *Logger, io: Io, t: usize, own: bool) void {

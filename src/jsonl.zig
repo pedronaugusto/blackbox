@@ -25,7 +25,7 @@ pub const JsonlSink = struct {
     sink: Sink = .{ .vtable = &vtable },
     output: Output,
     options: Options,
-    /// Set by `reopen` from any task; the next write or flush, under the sink's lock, opens the file.
+    /// Set by `reopen` from any task; the next write, under the sink's lock, opens the file.
     asked: aegis.Atomic(Asked) = .init(.no),
 
     pub const Options = struct {
@@ -56,8 +56,8 @@ pub const JsonlSink = struct {
 
     const vtable: Sink.VTable = .{ .write = write, .flush = flush };
 
-    /// A sink writing to `writer`, which its caller keeps and flushes as it likes; each record is
-    /// flushed through it.
+    /// A sink writing to `writer`, which its caller keeps. The logger flushes it after each turn of
+    /// the drain and each record rendered at the call.
     pub fn init(writer: *Io.Writer, options: Options) JsonlSink {
         return .{ .output = .{ .writer = writer }, .options = options };
     }
@@ -99,15 +99,18 @@ pub const JsonlSink = struct {
 
     fn write(sink: *Sink, io: Io, record: *const Record) Sink.WriteError!void {
         const self: *JsonlSink = @fieldParentPtr("sink", sink);
-        const w = try self.target(io);
-        try render(w, record, self.options);
-        try w.flush();
+        try render(try self.target(io), record, self.options);
     }
 
+    /// Hands on what the writer holds. A file that is not open has nothing to hand on: the next
+    /// write opens it, and a failed open is that write's failure, counted once.
     fn flush(sink: *Sink, io: Io) Sink.WriteError!void {
+        _ = io;
         const self: *JsonlSink = @fieldParentPtr("sink", sink);
-        const w = try self.target(io);
-        try w.flush();
+        switch (self.output) {
+            .writer => |w| try w.flush(),
+            .file => |*f| if (f.writer) |*w| try w.interface.flush(),
+        }
     }
 
     /// Where a record goes now: the file opened again first if that was asked, or if the last open
