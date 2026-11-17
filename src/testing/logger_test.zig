@@ -179,6 +179,9 @@ test "logger: std.log reaches the installed logger, and is counted before" {
     blackbox.std_log.install(&logger);
     blackbox.std_log.logFn(.info, .lib, "opened {s} in {d}ms", .{ "file", 3 });
     blackbox.std_log.uninstall();
+    const before = logger.status().before_install.raw();
+    blackbox.std_log.logFn(.debug, .lib, "with no logger", .{});
+    try testing.expectEqual(before + 1, logger.status().before_install.raw());
     try testing.expectEqual(@as(usize, 1), c.seen.items.len);
     try testing.expectEqualStrings("opened file in 3ms", c.seen.items[0].message);
     try testing.expect(std.mem.find(u8, c.text(), " INFO  lib: opened file in 3ms\n") != null);

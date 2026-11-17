@@ -96,7 +96,7 @@ pub fn refuseSecrets(comptime T: type, comptime path: []const u8) void {
 fn refuseSecretsDepth(comptime T: type, comptime path: []const u8, comptime depth: usize) void {
     if (depth > 6) return;
     if (T == aegis.SecretBytes or (@typeInfo(T) == .@"struct" and @hasField(T, "aegis_material")))
-        @compileError("blackbox: the field " ++ path ++ " holds a secret (" ++ @typeName(T) ++ "); a secret reaches a log only through declassify, with its reason");
+        @compileError("blackbox: a secret (" ++ @typeName(T) ++ ") reaches a log only through declassify, with its reason; the field " ++ path ++ " holds one");
     switch (@typeInfo(T)) {
         .@"struct" => |info| for (info.field_names, info.field_types) |name, F| refuseSecretsDepth(F, path ++ "." ++ name, depth + 1),
         .@"union" => |info| for (info.field_names, info.field_types) |name, F| refuseSecretsDepth(F, path ++ "." ++ name, depth + 1),
