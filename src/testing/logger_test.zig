@@ -201,18 +201,28 @@ const Run = struct {
     settle: bool,
     /// Records rendered before the drain was canceled.
     before_stop: usize = 0,
+    /// Set once the run has looked: a task holds its producer until then, so no release wakes the
+    /// drain for it.
+    looked: bool = false,
+    /// Records the tasks have written.
+    written: usize = 0,
 
     fn main(run: *Run, io: Io) void {
         var drainer = io.concurrent(Logger.drain, .{ &run.logger, io }) catch @panic("no concurrency");
         var group: Io.Group = .init;
         for (0..run.tasks) |t| group.concurrent(io, task, .{ run, io, t }) catch @panic("no concurrency");
         if (run.settle) {
-            group.await(io) catch {};
+            // Every record written, none released: what the drain renders now it renders awake.
+            var spins: usize = 0;
+            while (run.written < run.tasks * run.per_task and spins < 100_000) : (spins += 1)
+                io.sleep(.fromMicroseconds(10), .awake) catch {};
             // A second of simulated time is ample for a drain that is awake.
             var waited: usize = 0;
             while (run.collect.seen.items.len < run.tasks * run.per_task and waited < 1000) : (waited += 1)
                 io.sleep(.fromMilliseconds(1), .awake) catch {};
             run.before_stop = run.collect.seen.items.len;
+            run.looked = true;
+            group.await(io) catch {};
             drainer.cancel(io) catch {};
             return;
         }
@@ -228,13 +238,15 @@ const Run = struct {
             if (producer) |p| p.scoped(.sim).info(io, "r", .{ .task = t, .seq = seq }) else run.logger.scoped(.sim).info(io, "r", .{ .task = t, .seq = seq });
             if (seq % 3 == t % 3) io.sleep(.fromNanoseconds(@intCast(1000 * (seq + 1))), .awake) catch {};
         }
+        _ = @atomicRmw(usize, &run.written, .Add, run.per_task, .monotonic);
+        if (run.settle) while (!run.looked) io.sleep(.fromMicroseconds(10), .awake) catch {};
         if (producer) |p| p.release(io);
     }
 };
 
 test "logger: every record once per sink or counted dropped, each task's order kept, the drain stopping anywhere, and rendered while it runs" {
     const gpa = testing.allocator;
-    for (0..48) |seed| for ([_]bool{ false, true }) |drop| for ([_]bool{ false, true }) |settle| {
+    for (0..64) |seed| for ([_]bool{ false, true }) |drop| for ([_]bool{ false, true }) |settle| {
         var prng: std.Random.DefaultPrng = .init(seed);
         const r = prng.random();
         var run: Run = .{
@@ -268,4 +280,58 @@ test "logger: every record once per sink or counted dropped, each task's order k
         // A running drain renders what is queued without being stopped.
         if (settle and !drop) try testing.expectEqual(run.tasks * run.per_task, run.before_stop);
     };
+}
+
+test "logger: a turn renders every ring's records in time order" {
+    const io = testing.io;
+    var c: Collect = .init(testing.allocator);
+    defer c.deinit();
+    var logger: Logger = try .init(testing.allocator, &.{&c.sink}, .{ .delivery = .{ .queued = .{} } });
+    defer logger.deinit(io);
+    // The drain's state, set by hand: records queue, and `flush` renders them in one turn.
+    logger.core.state.store(.running, .seq_cst);
+    const a = try logger.producer(io, testing.allocator, .literal("4KiB"));
+    const b = try logger.producer(io, testing.allocator, .literal("4KiB"));
+    for (0..30) |seq| {
+        switch (seq % 3) {
+            0 => a.scoped(.t).info(io, "r", .{ .task = 0, .seq = seq }),
+            1 => b.scoped(.t).info(io, "r", .{ .task = 1, .seq = seq }),
+            else => logger.scoped(.t).info(io, "r", .{ .task = 2, .seq = seq }),
+        }
+        io.sleep(.fromMicroseconds(50), .awake) catch {};
+    }
+    try testing.expectEqual(@as(usize, 0), c.seen.items.len);
+    logger.flush(io);
+    try testing.expectEqual(@as(usize, 30), c.seen.items.len);
+    for (c.seen.items, 0..) |seen, seq| try testing.expectEqual(@as(u64, seq), seen.seq);
+    logger.core.state.store(.stopped, .seq_cst);
+    a.release(io);
+    b.release(io);
+}
+
+test "logger: a full queue drops and counts, and says so in a record of its own" {
+    const io = testing.io;
+    var c: Collect = .init(testing.allocator);
+    defer c.deinit();
+    var logger: Logger = try .init(testing.allocator, &.{&c.sink}, .{ .max_record = .literal("1KiB"), .delivery = .{ .queued = .{ .capacity = .literal("1KiB"), .when_full = .drop } } });
+    defer logger.deinit(io);
+    logger.core.state.store(.running, .seq_cst);
+    const ring = try logger.producer(io, testing.allocator, .literal("1KiB"));
+    const body: [300]u8 = @splat('b');
+    for (0..10) |seq| {
+        logger.scoped(.t).info(io, "r", .{ .task = 0, .seq = seq, .body = &body });
+        ring.scoped(.t).info(io, "r", .{ .task = 1, .seq = seq, .body = &body });
+    }
+    const dropped = logger.status().dropped.raw();
+    try testing.expect(dropped > 0);
+    logger.flush(io);
+    var rendered: usize = 0;
+    var reported: ?u64 = null;
+    for (c.seen.items) |seen| {
+        if (std.mem.eql(u8, seen.message, "records dropped")) reported = seen.seq else rendered += 1;
+    }
+    try testing.expectEqual(@as(usize, 20), rendered + dropped);
+    try testing.expect(reported != null);
+    logger.core.state.store(.stopped, .seq_cst);
+    ring.release(io);
 }
