@@ -335,3 +335,54 @@ test "logger: a full queue drops and counts, and says so in a record of its own"
     logger.core.state.store(.stopped, .seq_cst);
     ring.release(io);
 }
+
+test "logger: a ring the drain left behind is rendered first, in order, once it stops" {
+    const io = testing.io;
+    var c: Collect = .init(testing.allocator);
+    defer c.deinit();
+    var logger: Logger = try .init(testing.allocator, &.{&c.sink}, .{ .delivery = .{ .queued = .{} } });
+    defer logger.deinit(io);
+    const ring = try logger.producer(io, testing.allocator, .literal("4KiB"));
+    // Written while a drain ran, which stopped without seeing them.
+    logger.core.state.store(.running, .seq_cst);
+    for (0..3) |seq| ring.scoped(.t).info(io, "r", .{ .task = 0, .seq = seq });
+    logger.core.state.store(.stopped, .seq_cst);
+    ring.scoped(.t).info(io, "r", .{ .task = 0, .seq = 3 });
+    try testing.expectEqual(@as(usize, 4), c.seen.items.len);
+    for (c.seen.items, 0..) |seen, seq| try testing.expectEqual(@as(u64, seq), seen.seq);
+    ring.release(io);
+}
+
+fn stress(logger: *Logger, io: Io, t: usize, own: bool) void {
+    const producer = if (own) logger.producer(io, testing.allocator, .literal("1KiB")) catch @panic("OOM") else null;
+    for (0..300) |seq| {
+        if (producer) |p| p.scoped(.stress).info(io, "r", .{ .task = t, .seq = seq }) else logger.scoped(.stress).info(io, "r", .{ .task = t, .seq = seq });
+    }
+    if (producer) |p| p.release(io);
+}
+
+test "logger: under threads, every record once and in each task's order, the drain stopped mid-way" {
+    // The races between one atomic and the next that a simulated schedule cannot reach, run on
+    // real threads (and under ThreadSanitizer in the release tier's hardened job).
+    const io = testing.io;
+    for (0..4) |round| {
+        var c: Collect = .init(testing.allocator);
+        defer c.deinit();
+        var logger: Logger = try .init(testing.allocator, &.{&c.sink}, .{ .max_record = .literal("1KiB"), .delivery = .{ .queued = .{ .capacity = .literal("2KiB") } } });
+        defer logger.deinit(io);
+        var drainer = try io.concurrent(Logger.drain, .{ &logger, io });
+        var group: Io.Group = .init;
+        for (0..6) |t| try group.concurrent(io, stress, .{ &logger, io, t, (t + round) % 2 == 0 });
+        io.sleep(.fromMicroseconds(@intCast(200 * round)), .awake) catch {};
+        drainer.cancel(io) catch |err| switch (err) {
+            error.Canceled => {},
+        };
+        try group.await(io);
+        var next: [6]u64 = @splat(0);
+        for (c.seen.items) |seen| {
+            try testing.expectEqual(next[seen.task], seen.seq);
+            next[seen.task] += 1;
+        }
+        for (next) |n| try testing.expectEqual(@as(u64, 300), n);
+    }
+}
