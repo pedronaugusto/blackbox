@@ -68,6 +68,36 @@ drainer.cancel(io) catch |err| switch (err) {
 ```
 <!-- END GENERATED -->
 
+### JSON Lines
+
+Built with `-Djsonl` (`.jsonl = true` from a project, which then fetches strand), `blackbox_jsonl`
+writes each record as one JSON object on one line, in the shape Go's `slog` JSON handler writes:
+`time`, `level`, `scope`, `msg`, the fields as members, then `trace` and `span`. Whatever bytes a
+field holds, the line is JSON (bytes that are not UTF-8 become U+FFFD), and a text the record's limit
+cut ends in `…`. The sink writes to any `*std.Io.Writer`, or appends to a file it opens again on
+`reopen`, for logrotate's rename-and-signal convention:
+
+<!-- BEGIN GENERATED zig build docs -- jsonl -->
+```zig
+const blackbox = @import("blackbox");
+const blackbox_jsonl = @import("blackbox_jsonl");
+
+var buffer: [4096]u8 = undefined;
+var json: blackbox_jsonl.JsonlSink = try .open(io, logs, "app.jsonl", &buffer, .{});
+var logger: blackbox.Logger = try .init(gpa, &.{&json.sink}, .{});
+defer logger.deinit(io);
+
+const log = logger.scoped(.http);
+// {"time":"…","level":"INFO","scope":"http","msg":"answered","status":200,"path":"/index.html"}
+log.info(io, "answered", .{ .status = 200, .path = "/index.html" });
+
+// After logrotate renamed the file: the next record opens app.jsonl again.
+json.reopen();
+log.info(io, "rotated", .{});
+try json.close(io);
+```
+<!-- END GENERATED -->
+
 ## Licence
 
 MIT.

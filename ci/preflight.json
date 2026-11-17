@@ -3,7 +3,8 @@
     "src"
   ],
   "test_roots": [
-    "src/tests.zig"
+    "src/tests.zig",
+    "src/testing/jsonl_test.zig"
   ],
   "test_support": [
     "src/testing/**"
@@ -31,6 +32,14 @@
       "region": "std-log",
       "imports": [
         "blackbox"
+      ]
+    },
+    "zig build docs -- jsonl": {
+      "source": "examples/jsonl.zig",
+      "region": "jsonl",
+      "imports": [
+        "blackbox",
+        "blackbox_jsonl"
       ]
     },
     "zig build docs -- queued": {

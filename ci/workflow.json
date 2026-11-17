@@ -1,0 +1,20 @@
+{
+  "configurations": [
+    {
+      "name": "plain",
+      "options": {
+        "jsonl": false
+      }
+    },
+    {
+      "name": "jsonl",
+      "options": {
+        "jsonl": true
+      },
+      "modules": [
+        "blackbox",
+        "blackbox_jsonl"
+      ]
+    }
+  ]
+}

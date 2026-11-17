@@ -13,6 +13,12 @@
             .url = "git+https://github.com/pedronaugusto/almanac#ea721576d7bba54dca6be2927497331037db387b",
             .hash = "almanac-0.0.0-sQeSObNoCgBwOfSBXPUmZOZ5UpOj2Ll-ybqEg1F5lQGY",
         },
+        // JSON for blackbox_jsonl, the JSON Lines sink: fetched only by a build with `.jsonl = true`.
+        .strand = .{
+            .url = "git+https://github.com/pedronaugusto/strand#a49e6c50e42630166c060b36438871cc28f649a1",
+            .hash = "strand-0.15.0-8LNWVmWyNwBJCxiXMsa5EE8LNwF_9akRcDV19MCCpTJ0",
+            .lazy = true,
+        },
     },
     .dev_dependencies = .{
         .shakedown = .{

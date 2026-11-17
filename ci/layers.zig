@@ -10,19 +10,22 @@ pub const layers: []const gantry.rules.Layer = &.{
     .{ .name = "calls", .patterns = &.{ "src/scoped.zig", "src/Producer.zig" } },
     .{ .name = "logger", .patterns = &.{ "src/Logger.zig", "src/std_log.zig" } },
     .{ .name = "root", .patterns = &.{"src/blackbox.zig"} },
+    // blackbox_jsonl: a module of its own over blackbox's, which it reaches by its name.
+    .{ .name = "jsonl", .patterns = &.{"src/jsonl.zig"} },
 };
 
 pub const entries: []const []const u8 = &.{};
 
 pub const modules: []const gantry.NamedModule = &.{
     .{ .name = "blackbox", .path = "src/blackbox.zig" },
+    .{ .name = "blackbox_jsonl", .path = "src/jsonl.zig" },
 };
 
 const package_references = [_]gantry.rules.ReferenceRule{
     .{
         .name = "named dependencies",
         .unresolved_only = true,
-        .except_targets = &.{ "std", "aegis", "almanac", "shakedown", "builtin", "blackbox", "rejection_options" },
+        .except_targets = &.{ "std", "aegis", "almanac", "shakedown", "builtin", "blackbox", "blackbox_jsonl", "blackbox_options", "strand", "rejection_options" },
     },
     .{ .name = "source siblings", .suffix = ".zig", .relative = true, .except_targets = &.{"src/**"} },
 };
@@ -48,4 +51,5 @@ pub const required = [_][]const u8{
     "src/Span.zig",
     "src/std_log.zig",
     "src/blackbox.zig",
+    "src/jsonl.zig",
 };
