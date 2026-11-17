@@ -1,8 +1,7 @@
-//! What a project that depends on blackbox and nothing else writes, plain, with `.jsonl = true` and
-//! with `.chronicle = true`. Built by `check-consumer` with only the packages blackbox itself needs
-//! (aegis and almanac, strand for an optional module, chronicle for the chronicle sink), so
-//! blackbox's build.zig works without any of its own development's; `blackbox_jsonl` and
-//! `blackbox_chronicle` are imported where the build made them.
+//! What a project that depends on blackbox and nothing else writes, with the build taking no
+//! options: `blackbox`, and the two sinks, which every build declares. Built by `check-consumer`
+//! with only the packages blackbox itself needs (aegis and almanac, strand for the sinks, chronicle
+//! for the chronicle sink), so blackbox's build.zig works without any of its own development's.
 const std = @import("std");
 const blackbox = @import("blackbox");
 
@@ -13,12 +12,12 @@ pub fn main(init: std.process.Init) !void {
     var text: blackbox.TextSink = .init(&stderr.interface, .{});
     var logger: blackbox.Logger = try .init(init.gpa, &.{&text.sink}, .{});
     defer logger.deinit(io);
-    logger.scoped(.consumer).info(io, "built", .{ .jsonl = blackbox.built_with.jsonl });
-    if (blackbox.built_with.jsonl) try jsonl(@import("blackbox_jsonl"), init.gpa, io);
-    if (blackbox.built_with.chronicle) chronicle(@import("blackbox_chronicle"));
+    logger.scoped(.consumer).info(io, "built", .{});
+    try jsonl(@import("blackbox_jsonl"), init.gpa, io);
+    chronicle(@import("blackbox_chronicle"));
 }
 
-/// blackbox_jsonl's sink, in the build that has it: a record written to a discarding writer.
+/// blackbox_jsonl's sink: a record written to a discarding writer.
 fn jsonl(comptime blackbox_jsonl: type, gpa: std.mem.Allocator, io: std.Io) !void {
     var discarding: std.Io.Writer.Discarding = .init(&.{});
     var sink: blackbox_jsonl.JsonlSink = .init(&discarding.writer, .{});
@@ -28,7 +27,7 @@ fn jsonl(comptime blackbox_jsonl: type, gpa: std.mem.Allocator, io: std.Io) !voi
     if (discarding.fullCount() == 0) return error.NothingWritten;
 }
 
-/// blackbox_chronicle's names, in the build that has them: compiled, and the sink a `Sink`.
+/// blackbox_chronicle's names: compiled, and the sink a `Sink`.
 fn chronicle(comptime blackbox_chronicle: type) void {
     _ = &blackbox_chronicle.ChronicleSink.init;
     _ = &blackbox_chronicle.ChronicleSink.deinit;

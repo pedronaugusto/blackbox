@@ -6,9 +6,9 @@ secret cannot reach a log (refused at compile time), no record is lost silently 
 are counted and reported), and there is no thread-local context: a span or a producer is a value
 handed where it is used. Built on aegis and almanac.
 
-Status: in development, before 0.1.0. A build with `-Dchronicle` holds two strands, blackbox's
-(a49e6c5, for its JSON writer) and chronicle's own (cb3d74c), as separate packages, until the family
-pins to released versions; the same holds for xenoglyph.
+Status: in development, before 0.1.0. A program that imports `blackbox_chronicle` holds two strands,
+blackbox's (a49e6c5, for its JSON writer) and chronicle's own (cb3d74c), as separate packages, until
+the family pins to released versions; the same holds for xenoglyph.
 
 ## Usage
 
@@ -72,8 +72,8 @@ drainer.cancel(io) catch |err| switch (err) {
 
 ### JSON Lines
 
-Built with `-Djsonl` (`.jsonl = true` from a project, which then fetches strand), `blackbox_jsonl`
-writes each record as one JSON object on one line, in the shape Go's `slog` JSON handler writes:
+`blackbox_jsonl` (a module every build of blackbox declares, over strand, which is fetched with
+blackbox and compiled only for a program that imports the sink) writes each record as one JSON object on one line, in the shape Go's `slog` JSON handler writes:
 `time`, `level`, `scope`, `msg`, the fields as members, then `trace` and `span`. Whatever bytes a
 field holds, the line is JSON (bytes that are not UTF-8 become U+FFFD), and a text the record's limit
 cut ends in `…`. The sink writes to any `*std.Io.Writer`, or appends to a file it opens again on
@@ -102,8 +102,7 @@ try json.close(io);
 
 ### chronicle
 
-Built with `-Dchronicle` (`.chronicle = true`, which fetches chronicle and strand),
-`blackbox_chronicle` appends each record to a chronicle journal of `chronicle.Raw` events: the
+`blackbox_chronicle` (declared the same way, over chronicle and strand) appends each record to a chronicle journal of `chronicle.Raw` events: the
 object the JSON Lines sink writes for it, at the record's time in milliseconds. The records a turn
 of the drain renders go in one `appendAll`, so a journal that syncs on every append pays one sync a
 turn; a record delivered at the call is appended before the call returns. The journal is the

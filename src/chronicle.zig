@@ -1,6 +1,6 @@
-//! blackbox_chronicle, built with `-Dchronicle` (`.chronicle = true` from a project): the chronicle
-//! sink. Each record is appended to a chronicle journal of `chronicle.Raw` events, as the JSON
-//! object the JSON Lines sink writes for it (`blackbox_jsonl.render`, without its newline), at the
+//! blackbox_chronicle, which every build of blackbox declares: the chronicle sink. Each record is
+//! appended to a chronicle journal of `chronicle.Raw` events, as the JSON object the JSON Lines
+//! sink writes for it (`blackbox_jsonl.render`, without its newline), at the
 //! record's time in milliseconds. A reader reads an event back with strand, as any type with the
 //! members it wants (`msg`, `level`, a field), or as the `Raw` it is.
 //!

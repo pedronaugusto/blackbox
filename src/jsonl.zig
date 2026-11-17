@@ -1,4 +1,4 @@
-//! blackbox_jsonl, built with `-Djsonl` (`.jsonl = true` from a project): the JSON Lines sink. A
+//! blackbox_jsonl, which every build of blackbox declares: the JSON Lines sink. A
 //! record is one JSON object on one line, in the shape Go's `slog` JSON handler writes:
 //!
 //!   {"time":"2026-11-17T16:32:02.123Z","level":"INFO","scope":"http","msg":"answered","status":200}
