@@ -1,0 +1,44 @@
+{
+  "sources": [
+    "src"
+  ],
+  "test_roots": [
+    "src/tests.zig"
+  ],
+  "test_support": [
+    "src/testing/**"
+  ],
+  "test_dependencies": [
+    "shakedown"
+  ],
+  "shipped": {},
+  "function_exceptions": {},
+  "layout_exceptions": {},
+  "glint_paths": [
+    "src",
+    "build.zig"
+  ],
+  "docs": {
+    "zig build docs -- records": {
+      "source": "examples/usage.zig",
+      "region": "records",
+      "imports": [
+        "blackbox"
+      ]
+    },
+    "zig build docs -- std-log": {
+      "source": "examples/usage.zig",
+      "region": "std-log",
+      "imports": [
+        "blackbox"
+      ]
+    },
+    "zig build docs -- queued": {
+      "source": "examples/usage.zig",
+      "region": "queued",
+      "imports": [
+        "blackbox"
+      ]
+    }
+  }
+}

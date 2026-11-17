@@ -66,11 +66,22 @@ pub fn dev(b: *std.Build, tools: type) void {
         }
     }
     b.getInstallStep().dependOn(&tests.step);
+    // The README's examples, run as part of the tests.
+    const example = b.addExecutable(.{
+        .name = "usage",
+        .root_module = b.createModule(.{ .root_source_file = p.path("examples/usage.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "blackbox", .module = package.module("blackbox") }} }),
+    });
+    const examples = b.step("examples", "Build and run the usage example");
+    examples.dependOn(&b.addRunArtifact(example).step);
+    test_step.dependOn(examples);
+    check.dependOn(&example.step);
     tools.preflight.addCi(b, p, .{
         .tests = test_step,
         .portable_tests = true,
         .hardened = .{ .fuzz_step = "test", .tsan_step = "test" },
     });
+    // A plain consumer: blackbox, almanac and aegis, nothing of blackbox's development.
+    tools.preflight.addConsumerCheck(b, p, .{ .package = "blackbox", .program = p.path("examples/usage.zig"), .packages = &.{ p.dependency("aegis", .{ .target = target, .optimize = optimize }), p.dependency("almanac", .{ .target = target, .optimize = optimize }) } });
 }
 
 /// What each case of src/testing/secret_rejected.zig is refused with.
