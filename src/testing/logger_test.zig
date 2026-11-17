@@ -353,6 +353,33 @@ test "logger: a ring the drain left behind is rendered first, in order, once it 
     ring.release(io);
 }
 
+test "logger: a record a stopped drain left in a ring is rendered by flush, and by release" {
+    const io = testing.io;
+    var c: Collect = .init(testing.allocator);
+    defer c.deinit();
+    var logger: Logger = try .init(testing.allocator, &.{&c.sink}, .{ .delivery = .{ .queued = .{} } });
+    defer logger.deinit(io);
+    const a = try logger.producer(io, testing.allocator, .literal("4KiB"));
+    const b = try logger.producer(io, testing.allocator, .literal("4KiB"));
+    // Written while a drain ran, which stopped without seeing them; neither producer writes again.
+    logger.core.state.store(.running, .seq_cst);
+    a.scoped(.t).info(io, "r", .{ .task = 0, .seq = 0 });
+    b.scoped(.t).info(io, "r", .{ .task = 1, .seq = 0 });
+    logger.core.state.store(.stopped, .seq_cst);
+    try testing.expectEqual(@as(usize, 0), c.seen.items.len);
+    // Every record written before flush is called is rendered when it returns.
+    logger.flush(io);
+    try testing.expectEqual(@as(usize, 2), c.seen.items.len);
+    a.release(io);
+    // Shutdown renders everything written: a released producer's records, before deinit.
+    logger.core.state.store(.running, .seq_cst);
+    b.scoped(.t).info(io, "r", .{ .task = 1, .seq = 1 });
+    logger.core.state.store(.stopped, .seq_cst);
+    b.release(io);
+    try testing.expectEqual(@as(usize, 3), c.seen.items.len);
+    try testing.expectEqual(@as(u64, 1), c.seen.items[2].seq);
+}
+
 fn stress(logger: *Logger, io: Io, t: usize, own: bool) void {
     const producer = if (own) logger.producer(io, testing.allocator, .literal("1KiB")) catch @panic("OOM") else null;
     for (0..300) |seq| {
