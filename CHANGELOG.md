@@ -13,6 +13,8 @@ All notable changes to blackbox are documented here. The format follows
   dependency compiled only where a program imports the sink: `JsonlSink` writes a record as one JSON object in `slog`'s shape to a writer,
   or appends to a file that `reopen` opens again by its path after a rotation (`openFailure` says
   why an open failed; the records meanwhile fail and are counted).
+- `JsonlSink.Output` and `JsonlSink.Appended` are public, the types of its `output` field, which
+  a caller can reach.
 - `blackbox_chronicle`, the chronicle sink, declared the same way over chronicle and strand:
   `ChronicleSink` appends each record to a
   `chronicle.Journal(chronicle.Raw)` as the JSON Lines sink's object, the records of a turn of the

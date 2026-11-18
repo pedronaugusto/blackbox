@@ -13,14 +13,14 @@
             .url = "git+https://github.com/pedronaugusto/almanac#ea721576d7bba54dca6be2927497331037db387b",
             .hash = "almanac-0.0.0-sQeSObNoCgBwOfSBXPUmZOZ5UpOj2Ll-ybqEg1F5lQGY",
         },
-        // JSON for blackbox_jsonl, the JSON Lines sink: fetched only by a build with `.jsonl = true`.
+        // JSON for blackbox_jsonl, the JSON Lines sink: compiled only into a program that imports it.
         .strand = .{
             .url = "git+https://github.com/pedronaugusto/strand#a49e6c50e42630166c060b36438871cc28f649a1",
             .hash = "strand-0.15.0-8LNWVmWyNwBJCxiXMsa5EE8LNwF_9akRcDV19MCCpTJ0",
             .lazy = true,
         },
-        // The chronicle sink's journal, for blackbox_chronicle: fetched only by a build with
-        // `.chronicle = true`.
+        // The chronicle sink's journal, for blackbox_chronicle: compiled only into a program that
+        // imports it.
         .chronicle = .{
             .url = "git+https://github.com/pedronaugusto/chronicle#f90b90792957e24193620032b7bb00670025a347",
             .hash = "chronicle-0.10.0-cnph1Os6EgDAYPvrpqx48psY1CDvkUSvJfz2jSDHTFZg",

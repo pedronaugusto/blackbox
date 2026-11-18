@@ -35,13 +35,15 @@ pub const JsonlSink = struct {
 
     const Asked = enum(u8) { no, yes };
 
-    const Output = union(enum) {
+    /// Where the sink writes: a writer its caller keeps (`init`), or a file the sink opens by its
+    /// path and appends to (`open`).
+    pub const Output = union(enum) {
         writer: *Io.Writer,
         file: Appended,
     };
 
     /// A file the sink opened and appends to.
-    const Appended = struct {
+    pub const Appended = struct {
         dir: aegis.own.Unowned(Io.Dir),
         path: []const u8,
         buffer: []u8,

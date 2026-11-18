@@ -68,7 +68,8 @@ what was queued before it returns.
 
 `blackbox` depends on aegis and almanac alone, so the toolchain may log through it. `blackbox_jsonl`
 (the JSON Lines sink, over strand) and `blackbox_chronicle` (the chronicle sink) are always declared over
-lazy dependencies: a program that imports neither fetches neither. The `std.log` backend is reached
+lazy dependencies, so the build takes no options: strand and chronicle are fetched with blackbox, and
+compiled only into a program that imports a sink. The `std.log` backend is reached
 through one atomic pointer the program sets with `install`; before it, a record goes to std's default
 log and is counted.
 
