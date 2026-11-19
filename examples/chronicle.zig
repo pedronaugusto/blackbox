@@ -1,12 +1,15 @@
 //! blackbox_chronicle's usage: records appended to a chronicle journal, a turn of the drain at a time.
 
 const std = @import("std");
+const bound = @import("bound.zig");
 const blackbox = @import("blackbox");
 const blackbox_chronicle = @import("blackbox_chronicle");
 
 pub fn main(init: std.process.Init) !void {
     const gpa = init.gpa;
     const io = init.io;
+    var watchdog = try io.concurrent(bound.watch, .{ io, "chronicle" });
+    defer watchdog.cancel(io);
     const path = ".zig-cache/tmp/blackbox-chronicle-example";
     // A fresh journal each run, so its count below is this run's.
     try std.Io.Dir.cwd().deleteTree(io, path);

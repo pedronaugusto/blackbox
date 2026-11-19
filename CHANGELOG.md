@@ -23,3 +23,5 @@ All notable changes to blackbox are documented here. The format follows
   append took. The build takes no options: a program chooses a sink by importing it.
 - The logger flushes every sink after each turn of the drain, after each record rendered at the
   call, and after a producer renders its own ring, so a sink may batch what one of those renders.
+- A turn of the drain stops, naming it, at a queued record that runs past what its writer
+  published, where it read on a lap at a time and rendered with no end.

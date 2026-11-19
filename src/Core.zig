@@ -586,12 +586,19 @@ fn turn(core: *Core, io: Io) void {
     for (consumer.released.items) |p| p.destroy();
 }
 
+/// The record at a source's head, and the position after it. A turn reads a source until its head
+/// is its tail, so a record must be whole and end at the tail at most: one that ran past it (a
+/// length word the writer never wrote, read as zero, skips a lap each time) would keep the turn
+/// rendering with no end. It stops here, named, instead.
 fn recordAt(s: *const Source) struct { record: []const u8, after: u64 } {
-    if (s.ring == null) {
+    const r: struct { record: []const u8, after: u64 } = if (s.ring == null) blk: {
         const len = Record.lengthOf(s.bytes[@intCast(s.head)..]);
-        return .{ .record = s.bytes[@intCast(s.head)..][0..len], .after = s.head + queue.aligned(len) };
-    }
-    const r = queue.at(s.bytes, s.head);
+        break :blk .{ .record = s.bytes[@intCast(s.head)..][0..len], .after = s.head + queue.aligned(len) };
+    } else blk: {
+        const at = queue.at(s.bytes, s.head);
+        break :blk .{ .record = at.record, .after = at.after };
+    };
+    aegis.assert.invariant(r.record.len >= Record.header_bytes and r.after <= s.tail, "blackbox: a queued record runs past what its writer published");
     return .{ .record = r.record, .after = r.after };
 }
 

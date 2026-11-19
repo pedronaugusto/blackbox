@@ -2,6 +2,7 @@
 //! through it, and queued delivery with its drain.
 
 const std = @import("std");
+const bound = @import("bound.zig");
 const blackbox = @import("blackbox");
 
 pub const std_options: std.Options = .{ .logFn = blackbox.std_log.logFn };
@@ -9,6 +10,8 @@ pub const std_options: std.Options = .{ .logFn = blackbox.std_log.logFn };
 pub fn main(init: std.process.Init) !void {
     const gpa = init.gpa;
     const io = init.io;
+    var watchdog = try io.concurrent(bound.watch, .{ io, "usage" });
+    defer watchdog.cancel(io);
     var out: std.Io.Writer.Allocating = .init(gpa);
     defer out.deinit();
 

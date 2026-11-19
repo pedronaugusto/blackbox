@@ -1,12 +1,15 @@
 //! blackbox_jsonl's usage: records as JSON Lines, to a file opened again after a rotation.
 
 const std = @import("std");
+const bound = @import("bound.zig");
 const blackbox = @import("blackbox");
 const blackbox_jsonl = @import("blackbox_jsonl");
 
 pub fn main(init: std.process.Init) !void {
     const gpa = init.gpa;
     const io = init.io;
+    var watchdog = try io.concurrent(bound.watch, .{ io, "jsonl" });
+    defer watchdog.cancel(io);
     const dir = std.Io.Dir.cwd();
     try dir.createDirPath(io, ".zig-cache/tmp/blackbox-jsonl-example");
     const logs = try dir.openDir(io, ".zig-cache/tmp/blackbox-jsonl-example", .{});
